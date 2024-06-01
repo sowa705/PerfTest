@@ -33,16 +33,23 @@ uint64_t xoshiro256p(struct xoshiro256p_state* state)
 }
 
 uint64_t lcg(uint64_t state) {
-    return state * 6364136223846793005 + 1;
+    return state * 2862933555777941757 + 3037000493;
+}
+
+uint64_t splitmix(uint64_t state) {
+    uint64_t z = (state += 0x9e3779b97f4a7c15);
+    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9;
+    z = (z ^ (z >> 27)) * 0x94d049bb133111eb;
+    return z ^ (z >> 31);
 }
 
 xoshiro256p_state xoshiro256p_init(uint64_t seed)
 {
 	struct xoshiro256p_state state;
-	state.s[0] = seed;
-	state.s[1] = 0x9E3779B97F4A7C15;
-	state.s[2] = 0x9E3779B97F4A7C15;
-	state.s[3] = 0x9E3779B97F4A7C15;
+	state.s[0] = splitmix(seed);
+	state.s[1] = splitmix(state.s[0]);
+	state.s[2] = splitmix(state.s[1]);
+	state.s[3] = splitmix(state.s[2]);
 
     for (int i = 0; i < 100; i++)
     {
@@ -112,10 +119,89 @@ uint64_t performCopyTest(size_t count, int threadId, size_t* startval, double* s
 }
 
 
+uint64_t xoshirogen(size_t count, int threadId, size_t* startval, double* scores)
+{
+
+    struct xoshiro256p_state state = xoshiro256p_init(time(NULL) + threadId);
+
+    size_t iters = 100000000;
+
+    while (startval[0] != 0x1234)
+    {
+        // wait until start is 0x1234
+    }
+
+    auto start = std::chrono::high_resolution_clock::now();
+
+    uint64_t sum = 0;
+    for (size_t i = 0; i < iters; i++)
+    {
+		sum += xoshiro256p(&state);
+    }
+
+    auto end = std::chrono::high_resolution_clock::now();
+
+    std::chrono::duration<double> elapsed = end - start;
+
+    double seconds = elapsed.count();
+	size_t generated = iters * sizeof(uint64_t);
+
+	std::cout << sum << "\n";
+
+	std::cout << "thread " << threadId << " generated " << generated << " bytes in " << seconds << " seconds\n";
+
+	scores[threadId] = generated / seconds / 1024 / 1024 / 1024;
+
+    return sum;
+}
 
 uint64_t memRandAccess(size_t count, int threadId, size_t* startval, double* scores)
 {
+    size_t* array1 = new size_t[count];
 
+    // initialize array1
+
+    struct xoshiro256p_state state = xoshiro256p_init(time(NULL) + threadId);
+
+    for (size_t i = 0; i < count; i++)
+    {
+		array1[i] = xoshiro256p(&state) % count;
+    }
+
+    size_t iters = count * 1000;
+
+    while (startval[0] != 0x1234)
+    {
+        // wait until start is 0x1234
+    }
+
+    size_t next = 0;
+    for (size_t i = 0; i < iters; i++)
+    {
+        next = array1[next];
+    }
+
+    auto start = std::chrono::high_resolution_clock::now();
+
+    uint64_t sum = 0;
+    for (size_t i = 0; i < iters; i++)
+    {
+        next = array1[next];
+
+		sum += next;
+    }
+
+    auto end = std::chrono::high_resolution_clock::now();
+
+    std::chrono::duration<double> elapsed = end - start;
+
+    double seconds = elapsed.count() / iters;
+
+	scores[threadId] = seconds * 1000000000;
+
+    delete[] array1;
+
+    return sum;
 }
 
 std::atomic<size_t> testatomic(0);
@@ -215,14 +301,14 @@ int main()
 {
     std::cout << "Hello World!\n";
 
-    size_t threads = 1;
+    size_t threads = 32;
 
     //performc2c();
 
     //return 0;
     for (size_t s = 1; s < 24; s++)
     {
-        size_t count = pow(2,s) * 128 / sizeof(size_t); // 128 MB
+        size_t count = pow(2,s) * 128 / sizeof(size_t);
 
         std::thread* thread = new std::thread[threads];
 
@@ -232,7 +318,7 @@ int main()
 
         for (size_t i = 0; i < threads; i++)
         {
-            thread[i] = std::thread(memRandAccess, count, i,start, scores);
+            thread[i] = std::thread(xoshirogen, count, i,start, scores);
             SetThreadAffinityMask(thread[i].native_handle(), 1 << i);
         }
 
@@ -250,6 +336,6 @@ int main()
             speed += scores[i];
         }
 
-        std::cout << "work size: " << count * sizeof(size_t) / 1024 << " KB, speed: " << speed << " ns\n";
+        std::cout << "work size: " << count * sizeof(size_t) /1024 << " KB, speed: " << speed << " ns\n";
     }
 }
